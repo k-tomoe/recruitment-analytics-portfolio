@@ -18,3 +18,10 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.log
+
+# SQLite database
+database/*.sqlite
+database/*.db
+
+# DB Browser for SQLite project
+*.sqbpro
