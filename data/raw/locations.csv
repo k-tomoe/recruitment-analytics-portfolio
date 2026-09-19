@@ -1,0 +1,9 @@
+﻿location_id,prefecture_name,area_group
+LOC001,東京都,首都圏
+LOC002,神奈川県,首都圏
+LOC003,埼玉県,首都圏
+LOC004,千葉県,首都圏
+LOC005,群馬県,北関東
+LOC006,大阪府,関西
+LOC007,愛知県,東海
+LOC008,福岡県,九州

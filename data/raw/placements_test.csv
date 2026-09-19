@@ -1,0 +1,4 @@
+﻿placement_id,application_id,decision_date,start_date,agreed_hourly_wage,status
+PLC00001,APP00008,2026-07-11,2026-08-10,1400,started
+PLC00002,APP00012,2026-08-07,2026-08-15,2250,started
+PLC00003,APP00017,2026-09-03,2026-09-16,1200,started

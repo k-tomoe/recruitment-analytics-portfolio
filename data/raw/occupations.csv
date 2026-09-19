@@ -1,0 +1,11 @@
+﻿occupation_id,occupation_name,occupation_group
+OCC001,一般事務,事務
+OCC002,データ入力,事務
+OCC003,コールセンター,カスタマーサポート
+OCC004,医薬翻訳,医薬専門職
+OCC005,品質管理（QC）,医薬専門職
+OCC006,DM（データマネジメント）,医薬専門職
+OCC007,CRC,医薬専門職
+OCC008,CRA,医薬専門職
+OCC009,統計解析,医薬専門職
+OCC010,薬事,医薬専門職

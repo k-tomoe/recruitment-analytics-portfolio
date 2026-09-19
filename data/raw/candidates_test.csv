@@ -1,0 +1,11 @@
+﻿candidate_id,ca_id,registration_date,search_end_date,status
+CAN00001,,2025-02-26,,searching
+CAN00002,CA012,2026-05-09,,searching
+CAN00003,CA018,2026-09-15,2026-09-30,ended
+CAN00004,,2026-06-20,,searching
+CAN00005,,2025-10-15,,searching
+CAN00006,CA010,2025-12-14,,searching
+CAN00007,CA004,2026-07-21,2026-08-07,placed
+CAN00008,,2026-04-29,2026-07-11,placed
+CAN00009,CA008,2025-10-12,2026-03-24,ended
+CAN00010,CA016,2025-10-25,2026-09-03,placed
