@@ -227,6 +227,206 @@ def get_candidate_ca(
 
 
 # =========================================================
+# 修正① self_entryから応募案件へ進む確率
+# =========================================================
+#
+# 【変更前】
+# 求人サイトでエントリーした候補者について、
+# スキルや同職種経験に関係なく、
+# 一律70%の確率で応募意思確認済みの
+# applicationへ移行させていた。
+#
+# 変更前コード：
+#
+# converts_to_application = (
+#     rng.random() < 0.70
+# )
+#
+#
+# 【問題点】
+# 初回EDAではself_entry 20件中15件で、
+# 求人職種と同じ職種の経験を確認できなかった。
+#
+# 求人サイト上で候補者が興味を示すこと自体は
+# 未経験職種でも十分発生し得る。
+#
+# 一方、CAが候補者と応募意思を確認し、
+# 正式な応募案件として扱う段階では、
+# 求人の要求スキルや候補者経験を確認するため、
+# 専門性の高い求人について未経験者が
+# 高確率でapplicationへ進む状態は不自然である。
+#
+#
+# 【修正仕様】
+# self_entryからapplicationへ進む確率を、
+# 同職種経験とスキル適合度によって変更する。
+#
+# 同職種経験あり：
+# ・要求スキル以上        → 80%
+# ・1段階不足             → 65%
+# ・2段階不足             → 40%
+# ・3段階以上不足         → 20%
+#
+# 同職種経験なし：
+# ・要求スキル1～2        → 45%
+# ・要求スキル3以上       → 15%
+#
+# 未経験者のエントリー自体は禁止せず、
+# applicationへの移行確率のみ下げる。
+#
+# ---------------------------------------------------------
+# 変更後コード
+# ---------------------------------------------------------
+
+def get_self_entry_conversion_probability(
+    candidate_id,
+    job,
+):
+
+    required_skill_level = int(
+        job["required_skill_level"]
+    )
+
+    candidate_skill = get_candidate_skill(
+        candidate_id,
+        job["occupation_id"],
+    )
+
+
+    # 同職種経験なし
+    if candidate_skill is None:
+
+        # 未経験でも比較的応募可能な求人
+        if required_skill_level <= 2:
+            return 0.45
+
+        # 専門性の高い求人
+        return 0.15
+
+
+    # 同職種経験あり
+    skill_gap = (
+        candidate_skill
+        - required_skill_level
+    )
+
+
+    if skill_gap >= 0:
+        return 0.80
+
+    elif skill_gap == -1:
+        return 0.65
+
+    elif skill_gap == -2:
+        return 0.40
+
+    else:
+        return 0.20
+
+
+# =========================================================
+# 修正② CAが企業推薦へ進める確率
+# =========================================================
+#
+# 【変更前】
+# 同職種経験が存在しない候補者を、
+# 内部的に
+#
+# skill_gap = -3
+#
+# として扱っていた。
+#
+# 【問題点】
+# SQL分析マートでは、同職種経験がない場合は
+# candidate_skill_level / skill_gap をNULLとしている。
+#
+# 一方、生成ロジック内部ではskill_gap=-3としていたため、
+# 「実際にスキルが3段階不足しているケース」と
+# 「同職種経験そのものが存在しないケース」が
+# 同一視されていた。
+#
+#
+# 【修正仕様】
+# 同職種経験なしはskill_gapへ無理に数値化せず、
+# candidate_skill is None として独立して扱う。
+#
+# 同職種経験がある場合のみskill_gapを計算する。
+#
+# ---------------------------------------------------------
+# 変更後コード
+# ---------------------------------------------------------
+
+def get_recommendation_probability(
+    candidate_skill,
+    required_skill_level,
+):
+
+    # 同職種経験なし
+    if candidate_skill is None:
+
+        if required_skill_level <= 2:
+            return 0.45
+
+        return 0.10
+
+
+    skill_gap = (
+        candidate_skill
+        - required_skill_level
+    )
+
+
+    if skill_gap >= 0:
+        return 0.95
+
+    elif skill_gap == -1:
+        return 0.82
+
+    elif skill_gap == -2:
+        return 0.55
+
+    else:
+        return 0.35
+
+
+# =========================================================
+# 企業側の推薦通過確率
+# =========================================================
+
+def get_acceptance_probability(
+    candidate_skill,
+    required_skill_level,
+):
+
+    # 同職種経験なし
+    if candidate_skill is None:
+
+        if required_skill_level <= 2:
+            return 0.40
+
+        return 0.15
+
+
+    skill_gap = (
+        candidate_skill
+        - required_skill_level
+    )
+
+
+    if skill_gap >= 0:
+        return 0.82
+
+    elif skill_gap == -1:
+        return 0.62
+
+    elif skill_gap == -2:
+        return 0.38
+
+    else:
+        return 0.22
+
+
+# =========================================================
 # 応募候補を格納
 # =========================================================
 
@@ -252,13 +452,28 @@ for _, entry in job_entries.iterrows():
     ]
 
 
-    # ---------------------------------------------
-    # 求人サイトでエントリーした後、
-    # 実際に応募意思が確認される確率
-    # ---------------------------------------------
+    # =====================================================
+    # 修正①
+    # スキル条件を考慮して応募案件化確率を決定
+    # =====================================================
+
+    job = jobs[
+        jobs["job_id"]
+        == job_id
+    ].iloc[0]
+
+
+    conversion_probability = (
+        get_self_entry_conversion_probability(
+            candidate_id,
+            job,
+        )
+    )
+
 
     converts_to_application = (
-        rng.random() < 0.70
+        rng.random()
+        < conversion_probability
     )
 
 
@@ -566,8 +781,29 @@ for _, application in (
 
 
     # =====================================================
-    # スキルギャップ
+    # 修正② スキル情報
     # =====================================================
+    #
+    # 変更前：
+    #
+    # if candidate_skill is None:
+    #     skill_gap = -3
+    #
+    # else:
+    #     skill_gap = (
+    #         candidate_skill
+    #         - required_skill_level
+    #     )
+    #
+    # 変更後：
+    # 同職種経験がない場合はcandidate_skill=Noneのままとし、
+    # skill_gapへ便宜的な数値を代入しない。
+
+    required_skill_level = int(
+        job[
+            "required_skill_level"
+        ]
+    )
 
     candidate_skill = (
         get_candidate_skill(
@@ -581,17 +817,13 @@ for _, application in (
 
     if candidate_skill is None:
 
-        skill_gap = -3
+        skill_gap = None
 
     else:
 
         skill_gap = (
             candidate_skill
-            - int(
-                job[
-                    "required_skill_level"
-                ]
-            )
+            - required_skill_level
         )
 
 
@@ -775,33 +1007,17 @@ for _, application in (
         withdrawal_reason = None
 
 
-        # ---------------------------------------------
+        # =================================================
+        # 修正③
         # CAが実際に企業推薦まで進める確率
-        # ---------------------------------------------
+        # =================================================
 
-        if skill_gap >= 0:
-
-            recommendation_probability = (
-                0.95
+        recommendation_probability = (
+            get_recommendation_probability(
+                candidate_skill,
+                required_skill_level,
             )
-
-        elif skill_gap == -1:
-
-            recommendation_probability = (
-                0.82
-            )
-
-        elif skill_gap == -2:
-
-            recommendation_probability = (
-                0.55
-            )
-
-        else:
-
-            recommendation_probability = (
-                0.35
-            )
+        )
 
 
         is_recommended = (
@@ -810,9 +1026,41 @@ for _, application in (
         )
 
 
-        # ---------------------------------------------
-        # 推薦されない場合
-        # ---------------------------------------------
+        # =================================================
+        # 修正③ 推薦対象外
+        # =================================================
+        #
+        # 【変更前】
+        # CAが企業推薦まで進めないと判定した案件でも、
+        #
+        # status = "confirmed"
+        #
+        # のまま残していた。
+        #
+        # 【問題点】
+        # 初回EDAでは28件中11件がconfirmedであり、
+        #
+        # ・CA判断による推薦見送り
+        # ・本当に処理中の案件
+        # ・データ期間末で観察できていない案件
+        #
+        # が区別できなかった。
+        #
+        #
+        # 【修正仕様】
+        # CAが推薦対象外と判断した案件は
+        #
+        # status = "screened_out"
+        #
+        # とする。
+        #
+        # 一方、推薦する予定だったものの
+        # recommendation_dateがDATA_END_DATEを超える場合は、
+        # 本当に観察途中であるため
+        # status = "confirmed"
+        # のまま残す。
+        #
+        # -------------------------------------------------
 
         if not is_recommended:
 
@@ -820,7 +1068,7 @@ for _, application in (
 
             recommendation_result = None
 
-            status = "confirmed"
+            status = "screened_out"
 
 
         # ---------------------------------------------
@@ -834,6 +1082,7 @@ for _, application in (
             )
 
 
+            # データ観察終了後に推薦予定の場合
             if (
                 recommendation_date
                 > DATA_END_DATE
@@ -843,6 +1092,7 @@ for _, application in (
 
                 recommendation_result = None
 
+                # 本当にまだ処理中なのでconfirmed
                 status = "confirmed"
 
 
@@ -852,29 +1102,12 @@ for _, application in (
                 # 企業側の推薦通過確率
                 # -------------------------------------
 
-                if skill_gap >= 0:
-
-                    acceptance_probability = (
-                        0.82
+                acceptance_probability = (
+                    get_acceptance_probability(
+                        candidate_skill,
+                        required_skill_level,
                     )
-
-                elif skill_gap == -1:
-
-                    acceptance_probability = (
-                        0.62
-                    )
-
-                elif skill_gap == -2:
-
-                    acceptance_probability = (
-                        0.38
-                    )
-
-                else:
-
-                    acceptance_probability = (
-                        0.22
-                    )
+                )
 
 
                 recommendation_accepted = (
@@ -1027,6 +1260,116 @@ assert applications[
 
 
 # =========================================================
+# 修正③ ステータス品質チェック
+# =========================================================
+
+assert applications[
+    "status"
+].isin(
+    [
+        "confirmed",
+        "screened_out",
+        "withdrawn",
+        "recommended",
+        "rejected",
+    ]
+).all()
+
+
+# screened_outでは
+# 推薦日・推薦結果・辞退日は存在しない
+screened_out_rows = applications[
+    applications[
+        "status"
+    ]
+    == "screened_out"
+]
+
+assert screened_out_rows[
+    "recommendation_date"
+].isna().all()
+
+assert screened_out_rows[
+    "recommendation_result"
+].isna().all()
+
+assert screened_out_rows[
+    "withdrawal_date"
+].isna().all()
+
+
+# confirmedは本当に観察途中の案件なので、
+# 推薦日・推薦結果・辞退日はまだ存在しない
+confirmed_rows = applications[
+    applications[
+        "status"
+    ]
+    == "confirmed"
+]
+
+assert confirmed_rows[
+    "recommendation_date"
+].isna().all()
+
+assert confirmed_rows[
+    "recommendation_result"
+].isna().all()
+
+assert confirmed_rows[
+    "withdrawal_date"
+].isna().all()
+
+
+# withdrawnでは辞退日が必要
+withdrawn_status_rows = applications[
+    applications[
+        "status"
+    ]
+    == "withdrawn"
+]
+
+assert withdrawn_status_rows[
+    "withdrawal_date"
+].notna().all()
+
+assert withdrawn_status_rows[
+    "recommendation_date"
+].isna().all()
+
+
+# recommendedでは推薦結果accepted
+recommended_status_rows = applications[
+    applications[
+        "status"
+    ]
+    == "recommended"
+]
+
+assert (
+    recommended_status_rows[
+        "recommendation_result"
+    ]
+    == "accepted"
+).all()
+
+
+# rejectedでは推薦結果rejected
+rejected_status_rows = applications[
+    applications[
+        "status"
+    ]
+    == "rejected"
+]
+
+assert (
+    rejected_status_rows[
+        "recommendation_result"
+    ]
+    == "rejected"
+).all()
+
+
+# =========================================================
 # 応募経路とSource IDの整合性
 # =========================================================
 
@@ -1100,6 +1443,15 @@ assert (
 ).all()
 
 
+# 応募意思確認日は観察終了日以前
+assert (
+    applications[
+        "intent_confirmed_date"
+    ]
+    <= DATA_END_DATE
+).all()
+
+
 # =========================================================
 # job_entriesのステータス更新
 # =========================================================
@@ -1168,7 +1520,9 @@ print("応募案件ステータス")
 print(
     applications[
         "status"
-    ].value_counts()
+    ].value_counts(
+        dropna=False
+    )
 )
 
 
@@ -1191,4 +1545,139 @@ print(
     job_entries[
         "status"
     ].value_counts()
+)
+
+
+# =========================================================
+# 修正内容の確認
+# =========================================================
+
+print()
+print(
+    "self_entry件数 / "
+    "CA紹介件数"
+)
+
+print(
+    applications[
+        "application_source"
+    ].value_counts()
+)
+
+
+print()
+print(
+    "screened_out件数"
+)
+
+print(
+    (
+        applications[
+            "status"
+        ]
+        == "screened_out"
+    ).sum()
+)
+
+
+print()
+print(
+    "confirmed件数"
+)
+
+print(
+    (
+        applications[
+            "status"
+        ]
+        == "confirmed"
+    ).sum()
+)
+
+
+# =========================================================
+# 同職種経験有無 × 応募経路を確認
+# ※ CSVには追加せず、確認用のみ
+# =========================================================
+
+application_skill_check = []
+
+
+for _, row in applications.iterrows():
+
+    job = jobs[
+        jobs["job_id"]
+        == row["job_id"]
+    ].iloc[0]
+
+    candidate_skill = (
+        get_candidate_skill(
+            row["candidate_id"],
+            job["occupation_id"],
+        )
+    )
+
+    application_skill_check.append(
+        {
+            "application_id":
+                row["application_id"],
+
+            "application_source":
+                row["application_source"],
+
+            "status":
+                row["status"],
+
+            "required_skill_level":
+                int(
+                    job[
+                        "required_skill_level"
+                    ]
+                ),
+
+            "same_occupation_experience":
+                candidate_skill
+                is not None,
+
+            "candidate_skill_level":
+                candidate_skill,
+        }
+    )
+
+
+application_skill_check = pd.DataFrame(
+    application_skill_check
+)
+
+
+print()
+print(
+    "応募経路 × 同職種経験有無"
+)
+
+print(
+    pd.crosstab(
+        application_skill_check[
+            "application_source"
+        ],
+        application_skill_check[
+            "same_occupation_experience"
+        ],
+        dropna=False,
+    )
+)
+
+
+print()
+print(
+    "応募案件のスキル確認"
+)
+
+print(
+    application_skill_check.sort_values(
+        [
+            "application_source",
+            "required_skill_level",
+        ]
+    )
 )

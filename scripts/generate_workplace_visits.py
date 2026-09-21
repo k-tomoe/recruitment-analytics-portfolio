@@ -333,6 +333,42 @@ assert scheduled_rows[
     "visit_date"
 ].isna().all()
 
+# =========================================================
+# 職場見学対象の整合性
+# =========================================================
+
+# 職場見学が生成された応募案件は、
+# 企業推薦結果がacceptedであること
+visit_application_check = (
+    workplace_visits.merge(
+        applications[
+            [
+                "application_id",
+                "status",
+                "recommendation_result",
+            ]
+        ],
+        on="application_id",
+        how="left",
+    )
+)
+
+assert (
+    visit_application_check[
+        "recommendation_result"
+    ]
+    == "accepted"
+).all()
+
+
+# accepted案件はapplication上では
+# recommendedステータスであること
+assert (
+    visit_application_check[
+        "status"
+    ]
+    == "recommended"
+).all()
 
 # 職場見学設定日は推薦日以降
 visit_check = workplace_visits.merge(

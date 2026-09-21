@@ -85,6 +85,7 @@ def get_active_preference(
     candidate_id,
     target_date,
 ):
+
     preference_rows = candidate_preferences[
         (
             candidate_preferences["candidate_id"]
@@ -132,39 +133,120 @@ for _, candidate in candidates.iterrows():
         "registration_date"
     ]
 
+
+    # -----------------------------------------------------
+    # 求職可能期間の終了日
+    # -----------------------------------------------------
+
     if pd.notna(
         candidate["search_end_date"]
     ):
+
         search_limit_date = candidate[
             "search_end_date"
         ]
+
     else:
+
         search_limit_date = DATA_END_DATE
 
 
     for _, job in jobs.iterrows():
 
         job_id = job["job_id"]
-        open_date = job["open_date"]
+
+        open_date = job[
+            "open_date"
+        ]
+
+        close_date = job[
+            "close_date"
+        ]
 
 
         # =================================================
-        # エントリー可能期間
+        # 修正① エントリー可能期間
         # =================================================
+        #
+        # 【変更前】
+        # 求人公開後45日以内、
+        # 求職期間内、
+        # データ観察期間内であれば
+        # エントリー可能としていた。
+        #
+        # 変更前コード：
+        #
+        # entry_window_start = max(
+        #     registration_date,
+        #     open_date,
+        # )
+        #
+        # entry_window_end = min(
+        #     open_date
+        #     + pd.Timedelta(days=45),
+        #     search_limit_date,
+        #     DATA_END_DATE,
+        # )
+        #
+        #
+        # 【問題点】
+        # generate_jobs.pyの修正により、
+        # 多くの求人にclose_dateが設定されるようになった。
+        #
+        # しかしjob_entries側でclose_dateを考慮しないと、
+        # すでに掲載終了している求人についても、
+        # 求人公開後45日以内であれば
+        # エントリーが生成される可能性がある。
+        #
+        #
+        # 【修正仕様】
+        # 求人サイトからのエントリーは、
+        # 以下すべてを満たす期間内だけ生成する。
+        #
+        # ・候補者登録日以降
+        # ・求人公開日以降
+        # ・求人公開後45日以内
+        # ・候補者の求職終了日以前
+        # ・DATA_END_DATE以前
+        # ・close_dateが存在する場合はclose_date以前
+        #
+        # 長期OPEN求人などclose_dateがNULLの場合は、
+        # close_dateによる制限は行わない。
+        #
+        # -------------------------------------------------
+        # 変更後コード
+        # -------------------------------------------------
 
-        # 求人公開後45日以内を
-        # 「求人を見てエントリーしやすい期間」と仮定
+        # エントリー開始日は、
+        # 「候補者登録日」と「求人公開日」の遅い方
         entry_window_start = max(
             registration_date,
             open_date,
         )
 
+
+        # まず、close_date以外の条件から
+        # エントリー可能終了日を設定
         entry_window_end = min(
             open_date
-            + pd.Timedelta(days=45),
+            + pd.Timedelta(
+                days=45
+            ),
             search_limit_date,
             DATA_END_DATE,
         )
+
+
+        # 求人が期間内にクローズしている場合は、
+        # close_dateもエントリー可能期間の上限にする
+        if pd.notna(
+            close_date
+        ):
+
+            entry_window_end = min(
+                entry_window_end,
+                close_date,
+            )
 
 
         # エントリー可能期間が存在しない場合
@@ -248,10 +330,13 @@ for _, candidate in candidates.iterrows():
             ]
         )
 
+
         if exact_occupation_match:
+
             entry_probability += 0.35
 
         elif same_occupation_group:
+
             entry_probability += 0.08
 
 
@@ -284,10 +369,13 @@ for _, candidate in candidates.iterrows():
             ]
         )
 
+
         if exact_location_match:
+
             entry_probability += 0.15
 
         elif same_area_group:
+
             entry_probability += 0.06
 
 
@@ -314,15 +402,19 @@ for _, candidate in candidates.iterrows():
 
 
         if wage_gap_ratio >= 0:
+
             entry_probability += 0.15
 
         elif wage_gap_ratio >= -0.05:
+
             entry_probability += 0.10
 
         elif wage_gap_ratio >= -0.10:
+
             entry_probability += 0.04
 
         elif wage_gap_ratio < -0.20:
+
             entry_probability -= 0.03
 
 
@@ -345,9 +437,11 @@ for _, candidate in candidates.iterrows():
             == job_work_style
         )
 
+
         # 仮説6を強く効かせないため、
         # 勤務形態の効果は小さくする
         if work_style_match:
+
             entry_probability += 0.04
 
 
@@ -372,6 +466,7 @@ for _, candidate in candidates.iterrows():
             rng.random()
             < entry_probability
         )
+
 
         if not does_enter:
             continue
@@ -429,6 +524,7 @@ for _, candidate in candidates.iterrows():
             ]
         )
 
+
         entry_counter += 1
 
 
@@ -457,23 +553,31 @@ assert job_entries[
     "entry_id"
 ].is_unique
 
+
 assert job_entries[
     "candidate_id"
 ].isin(
-    candidates["candidate_id"]
+    candidates[
+        "candidate_id"
+    ]
 ).all()
+
 
 assert job_entries[
     "job_id"
 ].isin(
-    jobs["job_id"]
+    jobs[
+        "job_id"
+    ]
 ).all()
+
 
 assert job_entries[
     "entry_source"
 ].eq(
     "job_site"
 ).all()
+
 
 assert job_entries[
     "status"
@@ -491,43 +595,139 @@ assert not job_entries.duplicated(
 ).any()
 
 
-# 求人公開日より前に
-# エントリーしていないことを確認
+# =========================================================
+# 求人公開期間との整合性
+# =========================================================
+
 entry_check = job_entries.merge(
     jobs[
         [
             "job_id",
             "open_date",
+            "close_date",
         ]
     ],
     on="job_id",
     how="left",
 )
 
+
+# 求人公開日より前に
+# エントリーしていないことを確認
 assert (
-    entry_check["entry_date"]
+    entry_check[
+        "entry_date"
+    ]
     >=
-    entry_check["open_date"]
+    entry_check[
+        "open_date"
+    ]
 ).all()
 
 
-# 求職者登録日より前に
+# =========================================================
+# 修正①に対する追加品質チェック
+# =========================================================
+#
+# close_dateが存在する求人では、
+# 求人終了後にエントリーしていないことを確認する。
+
+closed_job_entries = (
+    entry_check[
+        entry_check[
+            "close_date"
+        ].notna()
+    ]
+)
+
+
+assert (
+    closed_job_entries[
+        "entry_date"
+    ]
+    <=
+    closed_job_entries[
+        "close_date"
+    ]
+).all()
+
+
+# 求人公開後45日を超えて
 # エントリーしていないことを確認
+assert (
+    entry_check[
+        "entry_date"
+    ]
+    <=
+    (
+        entry_check[
+            "open_date"
+        ]
+        + pd.Timedelta(
+            days=45
+        )
+    )
+).all()
+
+
+# =========================================================
+# 求職者登録日との整合性
+# =========================================================
+
 entry_check = entry_check.merge(
     candidates[
         [
             "candidate_id",
             "registration_date",
+            "search_end_date",
         ]
     ],
     on="candidate_id",
     how="left",
 )
 
+
+# 求職者登録日より前に
+# エントリーしていないことを確認
 assert (
-    entry_check["entry_date"]
+    entry_check[
+        "entry_date"
+    ]
     >=
-    entry_check["registration_date"]
+    entry_check[
+        "registration_date"
+    ]
+).all()
+
+
+# 求職終了日が存在する場合、
+# 求職終了後にエントリーしていないことを確認
+ended_candidate_entries = (
+    entry_check[
+        entry_check[
+            "search_end_date"
+        ].notna()
+    ]
+)
+
+
+assert (
+    ended_candidate_entries[
+        "entry_date"
+    ]
+    <=
+    ended_candidate_entries[
+        "search_end_date"
+    ]
+).all()
+
+
+# DATA_END_DATEを超えていないこと
+assert (
+    job_entries[
+        "entry_date"
+    ]
+    <= DATA_END_DATE
 ).all()
 
 
@@ -536,7 +736,8 @@ assert (
 # =========================================================
 
 job_entries.to_csv(
-    OUTPUT_DIR / "job_entries_test.csv",
+    OUTPUT_DIR
+    / "job_entries_test.csv",
     index=False,
     encoding="utf-8-sig",
 )
@@ -569,6 +770,7 @@ job_entries_review = pd.DataFrame(
     ],
 )
 
+
 job_entries_review.to_csv(
     REVIEW_DIR
     / "job_entries_review.csv",
@@ -584,29 +786,38 @@ job_entries_review.to_csv(
 print(job_entries)
 
 print()
-print("求人エントリーテストデータを生成しました。")
+print(
+    "求人エントリーテストデータを生成しました。"
+)
+
 print(
     f"件数: {len(job_entries)}"
 )
 
+
 print()
 print("求職者ごとのエントリー件数")
+
 print(
     job_entries[
         "candidate_id"
     ].value_counts().sort_index()
 )
 
+
 print()
 print("求人ごとのエントリー件数")
+
 print(
     job_entries[
         "job_id"
     ].value_counts().sort_index()
 )
 
+
 print()
 print("マッチ条件の確認")
+
 print(
     job_entries_review[
         [
@@ -617,10 +828,51 @@ print(
     ].mean()
 )
 
+
 print()
 print("平均エントリー確率")
+
 print(
     job_entries_review[
         "entry_probability"
     ].mean()
+)
+
+
+# =========================================================
+# 修正①の内容確認
+# =========================================================
+
+print()
+print(
+    "終了済み求人へのエントリー件数"
+)
+
+print(
+    len(
+        closed_job_entries
+    )
+)
+
+
+print()
+print(
+    "求人公開日・終了日・エントリー日の確認"
+)
+
+print(
+    entry_check[
+        [
+            "entry_id",
+            "candidate_id",
+            "job_id",
+            "registration_date",
+            "open_date",
+            "close_date",
+            "entry_date",
+            "search_end_date",
+        ]
+    ].sort_values(
+        "entry_date"
+    )
 )

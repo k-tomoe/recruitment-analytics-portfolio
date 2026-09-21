@@ -292,8 +292,70 @@ for _, row in placement_candidates.iterrows():
 
 
     # =====================================================
-    # スキルギャップ
+    # 修正① スキルギャップ
     # =====================================================
+    #
+    # 【変更前】
+    # 同職種経験が存在しない場合、
+    #
+    # skill_gap = -3
+    #
+    # としていた。
+    #
+    # 【問題点】
+    # generate_applications.pyの修正により、
+    # 「同職種経験なし」と
+    # 「同職種経験はあるがスキル不足」を
+    # 区別する設計へ変更した。
+    #
+    # generate_placements.pyで再び
+    # 未経験者をskill_gap=-3として扱うと、
+    # 上流と下流でスキル定義が不一致になる。
+    #
+    # 【修正仕様】
+    # ・同職種経験なしは candidate_skill = None のまま扱う
+    # ・同職種経験がある場合のみ skill_gap を計算する
+    # ・就業決定確率では、
+    #   同職種経験なしを独立した条件として評価する
+    #
+    # -----------------------------------------------------
+    # 変更前コード
+    # -----------------------------------------------------
+    #
+    # candidate_skill = (
+    #     get_candidate_skill(
+    #         candidate_id,
+    #         row[
+    #             "occupation_id"
+    #         ],
+    #     )
+    # )
+    #
+    # if candidate_skill is None:
+    #
+    #     skill_gap = -3
+    #
+    # else:
+    #
+    #     job_row = jobs[
+    #         jobs["job_id"]
+    #         == job_id
+    #     ].iloc[0]
+    #
+    #     required_skill_level = int(
+    #         job_row[
+    #             "required_skill_level"
+    #         ]
+    #     )
+    #
+    #     skill_gap = (
+    #         candidate_skill
+    #         - required_skill_level
+    #     )
+    #
+    # -----------------------------------------------------
+    # 変更後コード
+    # -----------------------------------------------------
 
     candidate_skill = (
         get_candidate_skill(
@@ -304,22 +366,25 @@ for _, row in placement_candidates.iterrows():
         )
     )
 
+
+    job_row = jobs[
+        jobs["job_id"]
+        == job_id
+    ].iloc[0]
+
+
+    required_skill_level = int(
+        job_row[
+            "required_skill_level"
+        ]
+    )
+
+
     if candidate_skill is None:
 
-        skill_gap = -3
+        skill_gap = None
 
     else:
-
-        job_row = jobs[
-            jobs["job_id"]
-            == job_id
-        ].iloc[0]
-
-        required_skill_level = int(
-            job_row[
-                "required_skill_level"
-            ]
-        )
 
         skill_gap = (
             candidate_skill
@@ -369,25 +434,72 @@ for _, row in placement_candidates.iterrows():
         placement_probability -= 0.20
 
 
+    # =====================================================
+    # 修正① スキル条件
+    # =====================================================
+    #
+    # 【変更前】
+    #
+    # if skill_gap >= 0:
+    #     placement_probability += 0.08
+    #
+    # elif skill_gap == -1:
+    #     placement_probability -= 0.04
+    #
+    # elif skill_gap == -2:
+    #     placement_probability -= 0.12
+    #
+    # else:
+    #     placement_probability -= 0.20
+    #
+    #
+    # 【問題点】
+    # 同職種経験なしをskill_gap=-3相当として
+    # 一律に扱っていたため、
+    # 未経験と経験者のスキル不足を区別できなかった。
+    #
+    #
+    # 【修正仕様】
+    # ・candidate_skill is None の場合は未経験として独立処理
+    # ・要求スキル1～2では一定の就業可能性を残す
+    # ・要求スキル3以上ではより強いマイナス補正を行う
+    # ・同職種経験ありの場合は従来どおりskill_gapを評価
+    #
     # -----------------------------------------------------
-    # スキル条件
+    # 変更後コード
     # -----------------------------------------------------
 
-    if skill_gap >= 0:
+    if candidate_skill is None:
 
-        placement_probability += 0.08
+        # 要求スキル1～2では、
+        # 未経験でも就業決定する可能性を一定程度残す
+        if required_skill_level <= 2:
 
-    elif skill_gap == -1:
+            placement_probability -= 0.10
 
-        placement_probability -= 0.04
+        # 要求スキル3以上では、
+        # 同職種未経験の影響を強める
+        else:
 
-    elif skill_gap == -2:
-
-        placement_probability -= 0.12
+            placement_probability -= 0.25
 
     else:
 
-        placement_probability -= 0.20
+        if skill_gap >= 0:
+
+            placement_probability += 0.08
+
+        elif skill_gap == -1:
+
+            placement_probability -= 0.04
+
+        elif skill_gap == -2:
+
+            placement_probability -= 0.12
+
+        else:
+
+            placement_probability -= 0.20
 
 
     # -----------------------------------------------------
@@ -625,6 +737,82 @@ assert placements[
         "started",
         "cancelled",
     ]
+).all()
+
+
+# =========================================================
+# 修正② 就業決定対象の上流プロセス整合性
+# =========================================================
+#
+# 【目的】
+# placementが、
+#
+# 推薦accepted
+# ↓
+# 職場見学completed
+# ↓
+# result = continue
+# ↓
+# 就業決定
+#
+# という正しい業務フローを通った案件だけから
+# 生成されていることを確認する。
+#
+# screened_out、withdrawn、rejectedなどが
+# 誤ってplacementへ流入していないことも確認できる。
+
+placement_process_check = (
+    placements.merge(
+        applications[
+            [
+                "application_id",
+                "recommendation_result",
+            ]
+        ],
+        on="application_id",
+        how="left",
+    )
+    .merge(
+        workplace_visits[
+            [
+                "application_id",
+                "visit_status",
+                "result",
+            ]
+        ],
+        on="application_id",
+        how="left",
+    )
+)
+
+
+# 就業決定案件は、
+# 企業推薦がacceptedであること
+assert (
+    placement_process_check[
+        "recommendation_result"
+    ]
+    == "accepted"
+).all()
+
+
+# 就業決定案件は、
+# 職場見学が実施済みであること
+assert (
+    placement_process_check[
+        "visit_status"
+    ]
+    == "completed"
+).all()
+
+
+# 就業決定案件は、
+# 職場見学後に次工程へ進んでいること
+assert (
+    placement_process_check[
+        "result"
+    ]
+    == "continue"
 ).all()
 
 

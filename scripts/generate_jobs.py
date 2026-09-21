@@ -15,6 +15,12 @@ rng = np.random.default_rng(44)
 N_JOBS_2025 = 10
 N_JOBS_2026 = 10
 
+# 合成データの観察終了日
+#
+# この日までに実際にクローズした求人のみ
+# close_date を記録する。
+DATA_END_DATE = pd.Timestamp("2026-09-30")
+
 
 # =========================================================
 # マスタ読み込み
@@ -372,14 +378,149 @@ def generate_jobs(
         )
 
 
+        # =================================================
+        # 修正① 求人終了日・求人状態の生成
+        # =================================================
+        #
+        # 【変更前】
+        # 小規模テストでは、すべての求人を
+        # status = "open"
+        # close_date = NULL
+        # としていた。
+        #
+        # 【問題点】
+        # 初回EDAでは、2025年に公開された求人が
+        # 2026年にもCA紹介対象として残っていた。
+        #
+        # その結果、
+        # ・2025年公開求人に2026年の応募が紐づく
+        # ・古い求人が長期間紹介対象として残る
+        # ・求人公開年と応募年の関係が不自然になる
+        # という問題が確認された。
+        #
+        # 長期募集求人が存在すること自体は現実的だが、
+        # 全求人が長期OPENとなるのは不自然である。
+        #
+        # 【修正仕様】
+        # 求人ごとに求人期間タイプを設定する。
+        #
+        # ・約15%：短期求人
+        #   公開後60～90日程度で終了
+        #
+        # ・約70%：通常求人
+        #   公開後90～180日程度で終了
+        #
+        # ・約15%：長期OPEN求人
+        #   close_dateはNULL
+        #
+        # ただし、計算上の終了予定日が
+        # DATA_END_DATE（2026-09-30）より後の場合は、
+        # 観察期間内ではまだクローズしていないため、
+        # close_date = NULL
+        # status = "open"
+        # とする。
+        #
+        # -------------------------------------------------
+        # 変更前コード
+        # -------------------------------------------------
+        #
+        # # テスト段階では全件open
+        # status = "open"
+        #
+        # close_date = pd.NaT
+        #
+        # -------------------------------------------------
+        # 変更後コード
+        # -------------------------------------------------
+
+        job_duration_type = rng.choice(
+            [
+                "short",
+                "standard",
+                "long_open",
+            ],
+            p=[
+                0.15,
+                0.70,
+                0.15,
+            ],
+        )
+
+        if job_duration_type == "short":
+
+            # 短期求人：
+            # 公開後60～90日程度で終了
+            open_days = int(
+                rng.integers(
+                    60,
+                    91,
+                )
+            )
+
+            calculated_close_date = (
+                open_date
+                + pd.Timedelta(
+                    days=open_days
+                )
+            )
+
+        elif job_duration_type == "standard":
+
+            # 通常求人：
+            # 公開後90～180日程度で終了
+            open_days = int(
+                rng.integers(
+                    90,
+                    181,
+                )
+            )
+
+            calculated_close_date = (
+                open_date
+                + pd.Timedelta(
+                    days=open_days
+                )
+            )
+
+        else:
+
+            # 長期OPEN求人
+            calculated_close_date = pd.NaT
+
+
         # ---------------------------------------------
-        # 求人状態
+        # データ観察終了日時点の求人状態を決定
         # ---------------------------------------------
 
-        # テスト段階では全件open
-        status = "open"
+        if pd.isna(
+            calculated_close_date
+        ):
 
-        close_date = pd.NaT
+            # 長期OPEN求人
+            close_date = pd.NaT
+            status = "open"
+
+        elif (
+            calculated_close_date
+            <= DATA_END_DATE
+        ):
+
+            # データ期間内に終了した求人
+            close_date = (
+                calculated_close_date
+            )
+
+            status = "closed"
+
+        else:
+
+            # 計算上は将来終了する求人だが、
+            # DATA_END_DATE時点ではまだ公開中。
+            #
+            # 未来の終了イベントは観察していないため、
+            # close_dateはNULLとする。
+            close_date = pd.NaT
+            status = "open"
 
 
         # ---------------------------------------------
@@ -514,6 +655,51 @@ assert jobs[
 
 
 # =========================================================
+# 修正①に対する追加品質チェック
+# =========================================================
+
+# close_dateが存在する求人では、
+# close_dateがopen_dateより後であること
+closed_jobs = jobs[
+    jobs["close_date"].notna()
+]
+
+assert (
+    closed_jobs[
+        "close_date"
+    ]
+    >
+    closed_jobs[
+        "open_date"
+    ]
+).all()
+
+
+# closed求人には必ずclose_dateが存在すること
+assert jobs.loc[
+    jobs["status"] == "closed",
+    "close_date",
+].notna().all()
+
+
+# open求人ではclose_dateがNULLであること
+assert jobs.loc[
+    jobs["status"] == "open",
+    "close_date",
+].isna().all()
+
+
+# close_dateが存在する場合、
+# データ観察終了日を超えていないこと
+assert (
+    closed_jobs[
+        "close_date"
+    ]
+    <= DATA_END_DATE
+).all()
+
+
+# =========================================================
 # 年度列を確認用に作成
 # ※ CSVには出力しない
 # =========================================================
@@ -525,6 +711,23 @@ jobs_check["year"] = (
         "open_date"
     ].dt.year
 )
+
+
+# 求人公開期間を確認するための列
+#
+# close_dateがある求人のみ計算され、
+# OPEN求人はNaNになる
+jobs_check[
+    "open_days"
+] = (
+    jobs_check[
+        "close_date"
+    ]
+    -
+    jobs_check[
+        "open_date"
+    ]
+).dt.days
 
 
 # =========================================================
@@ -548,43 +751,120 @@ print()
 print("求人テストデータを生成しました。")
 print(f"件数: {len(jobs)}")
 
+
 print()
 print("年度別求人件数")
+
 print(
     jobs_check[
         "year"
     ].value_counts().sort_index()
 )
 
+
 print()
 print("年度別平均募集枠数")
+
 print(
     jobs_check.groupby(
         "year"
     )["required_slots"].mean()
 )
 
+
 print()
 print("年度別平均提示時給")
+
 print(
     jobs_check.groupby(
         "year"
     )["offered_hourly_wage"].mean()
 )
 
+
 print()
 print("年度別平均必要スキルレベル")
+
 print(
     jobs_check.groupby(
         "year"
-    )["required_skill_level"].mean()
+    )[
+        "required_skill_level"
+    ].mean()
 )
+
 
 print()
 print("年度×職種件数")
+
 print(
     pd.crosstab(
         jobs_check["year"],
         jobs_check["occupation_id"],
+    )
+)
+
+
+# =========================================================
+# 修正①の内容確認
+# =========================================================
+
+print()
+print("求人ステータス別件数")
+
+print(
+    jobs[
+        "status"
+    ].value_counts(
+        dropna=False
+    )
+)
+
+
+print()
+print("年度×求人ステータス件数")
+
+print(
+    pd.crosstab(
+        jobs_check["year"],
+        jobs_check["status"],
+    )
+)
+
+
+print()
+print("求人公開日・終了日確認")
+
+print(
+    jobs[
+        [
+            "job_id",
+            "open_date",
+            "close_date",
+            "status",
+        ]
+    ].sort_values(
+        "open_date"
+    )
+)
+
+
+print()
+print("終了済み求人の公開期間（日数）")
+
+print(
+    jobs_check.loc[
+        jobs_check[
+            "close_date"
+        ].notna(),
+        [
+            "job_id",
+            "year",
+            "open_date",
+            "close_date",
+            "open_days",
+        ],
+    ].sort_values(
+        "open_date"
     )
 )
