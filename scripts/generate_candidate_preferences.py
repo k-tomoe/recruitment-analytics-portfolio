@@ -9,9 +9,16 @@ import pandas as pd
 # =========================================================
 
 OUTPUT_DIR = Path("data/raw")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# 分析用データの正式ファイル名
+OUTPUT_FILE = OUTPUT_DIR / "candidate_preferences.csv"
 
 # このスクリプト専用の乱数シード
-rng = np.random.default_rng(43)
+#
+# 分析結果を見てseedを変更しないよう固定する。
+SEED = 43
+rng = np.random.default_rng(SEED)
 
 DATA_END_DATE = pd.Timestamp("2026-09-30")
 
@@ -19,9 +26,30 @@ DATA_END_DATE = pd.Timestamp("2026-09-30")
 # =========================================================
 # 元データ読み込み
 # =========================================================
+#
+# 【変更前】
+#
+# candidates_test.csv
+# candidate_experiences_test.csv
+#
+#
+# 【問題点】
+#
+# 小規模テスト用ファイルを参照していた。
+#
+#
+# 【修正仕様】
+#
+# 分析用データ生成では、
+#
+# candidates.csv
+# candidate_experiences.csv
+#
+# を入力とする。
+# =========================================================
 
 candidates = pd.read_csv(
-    OUTPUT_DIR / "candidates_test.csv",
+    OUTPUT_DIR / "candidates.csv",
     parse_dates=[
         "registration_date",
         "search_end_date",
@@ -29,7 +57,7 @@ candidates = pd.read_csv(
 )
 
 candidate_experiences = pd.read_csv(
-    OUTPUT_DIR / "candidate_experiences_test.csv",
+    OUTPUT_DIR / "candidate_experiences.csv",
     parse_dates=[
         "start_date",
         "end_date",
@@ -40,14 +68,51 @@ locations = pd.read_csv(
     OUTPUT_DIR / "locations.csv"
 )
 
-# 修正①で職種グループを利用するため追加
 occupations = pd.read_csv(
     OUTPUT_DIR / "occupations.csv"
 )
 
 
 # =========================================================
+# 入力データの基本確認
+# =========================================================
+
+assert len(candidates) > 0
+
+assert candidates[
+    "candidate_id"
+].is_unique
+
+assert candidate_experiences[
+    "candidate_id"
+].isin(
+    candidates["candidate_id"]
+).all()
+
+assert locations[
+    "location_id"
+].is_unique
+
+assert occupations[
+    "occupation_id"
+].is_unique
+
+
+# =========================================================
 # 職種ごとの希望時給の基準値
+# =========================================================
+#
+# 希望時給は、
+#
+# 職種基準
+# + スキル水準
+# + 個人差
+# + 市場時点による補正
+#
+# から生成する。
+#
+# H2では2026年に候補者希望時給の上昇が
+# 求人提示時給の上昇より大きくなる構造を作る。
 # =========================================================
 
 base_hourly_wage = {
@@ -91,46 +156,68 @@ location_probabilities = [
 ]
 
 
+assert np.isclose(
+    sum(location_probabilities),
+    1.0,
+)
+
+
+assert set(
+    location_ids
+).issubset(
+    set(locations["location_id"])
+)
+
+
 # =========================================================
-# 修正① 職種グループ辞書
+# 希望勤務形態の生成確率
 # =========================================================
 #
 # 【変更前】
-# キャリアチェンジ時には、
-# 10職種の中から完全ランダムに希望職種を選択していた。
+#
+# onsite 50%
+# hybrid 35%
+# remote 15%
+#
 #
 # 【問題点】
-# 完全ランダムにすると、
 #
-# ・経験職種と同じ職種が再び選ばれ、
-#   実際にはキャリアチェンジにならない
+# 特に問題は確認されていない。
 #
-# ・一般事務からCRAなど、
-#   大きく離れた職種転換が同じ確率で発生する
-#
-# という状態になる。
-#
-# candidate_experiences.pyでは、
-# 職歴について同一occupation_group内の
-# キャリア継続をある程度表現するよう修正したため、
-# 希望職種についても一定の整合性を持たせる。
 #
 # 【修正仕様】
-# ・80%：直近経験職種を希望
 #
-# ・残り20%：キャリアチェンジ
-#       ├─ 70%：同一occupation_group内の別職種
-#       └─ 30%：別グループを含む別職種
+# この分布を分析用データでも維持する。
 #
-# ・キャリアチェンジの場合は、
-#   原則として直近経験職種そのものは選択しない
+# H6「リモート可否」は支持されなかった仮説として
+# 分析する予定であるため、
 #
-# ・完全に職歴へ固定せず、
-#   未経験職種への希望も一定数残す
+# ・登録年
+# ・スキル
+# ・給与
+# ・placement結果
 #
-# ---------------------------------------------------------
-# 変更後コード
-# ---------------------------------------------------------
+# などによって勤務形態希望の確率を変えない。
+#
+# つまりwork_style自体に結果を直接作り込まない。
+# =========================================================
+
+work_styles = [
+    "onsite",
+    "hybrid",
+    "remote",
+]
+
+work_style_probabilities = [
+    0.50,
+    0.35,
+    0.15,
+]
+
+
+# =========================================================
+# 職種グループ辞書
+# =========================================================
 
 occupation_group_map = dict(
     zip(
@@ -144,8 +231,36 @@ occupation_ids = list(
 )
 
 
+assert all(
+    occupation_id
+    in occupation_group_map
+    for occupation_id
+    in occupation_ids
+)
+
+
 # =========================================================
 # キャリアチェンジ先職種を選択する関数
+# =========================================================
+#
+# 【変更前】
+#
+# ・80%は直近経験職種
+# ・20%はキャリアチェンジ
+# ・キャリアチェンジの70%は同一group
+#
+#
+# 【問題点】
+#
+# 小規模EDAでは大きな不整合は確認されなかった。
+#
+#
+# 【修正仕様】
+#
+# 基本ロジックを維持する。
+#
+# 求人側へ希望職種を意図的に合わせず、
+# 同職種経験あり・なしの両方が自然に発生する状態を残す。
 # =========================================================
 
 def select_career_change_occupation(
@@ -157,7 +272,6 @@ def select_career_change_occupation(
             current_occupation_id
         ]
     )
-
 
     # -----------------------------------------------------
     # 70%は同一職種グループ内での転換
@@ -180,7 +294,6 @@ def select_career_change_occupation(
             )
         ]
 
-
         if len(
             same_group_candidates
         ) > 0:
@@ -188,7 +301,6 @@ def select_career_change_occupation(
             return rng.choice(
                 same_group_candidates
             )
-
 
     # -----------------------------------------------------
     # 別グループを含むキャリアチェンジ
@@ -204,10 +316,94 @@ def select_career_change_occupation(
         )
     ]
 
-
     return rng.choice(
         other_occupations
     )
+
+
+# =========================================================
+# 希望時給を生成する関数
+# =========================================================
+#
+# 【変更前】
+#
+# 希望時給の計算をforループ内へ直接記述していた。
+#
+#
+# 【問題点】
+#
+# 分析用データでは、
+#
+# ・初回希望条件
+# ・更新後希望条件
+#
+# の双方で時給ロジックを利用するため、
+# 処理を関数化した方が定義が明確になる。
+#
+#
+# 【修正仕様】
+#
+# 指定した職種・スキル・基準日時点の希望時給を生成する。
+#
+# 2026年時点では市場上昇として約8%を加える。
+# =========================================================
+
+def generate_desired_hourly_wage(
+    occupation_id,
+    skill_level,
+    reference_date,
+):
+
+    desired_hourly_wage = (
+        base_hourly_wage[
+            occupation_id
+        ]
+    )
+
+    # スキルによる調整
+    desired_hourly_wage += (
+        skill_level - 3
+    ) * 150
+
+    # 個人差
+    desired_hourly_wage += rng.normal(
+        loc=0,
+        scale=100,
+    )
+
+    # -----------------------------------------------------
+    # H2：2026年の希望時給水準
+    # -----------------------------------------------------
+    #
+    # 2026年時点では約8%上昇。
+    #
+    # 求人提示時給側では後続のgenerate_jobs.pyで
+    # 約3%程度の上昇とする予定。
+    #
+    # この差によって給与不足率が
+    # 結果として拡大しやすくなる。
+    # -----------------------------------------------------
+
+    if reference_date.year >= 2026:
+
+        desired_hourly_wage *= 1.08
+
+    # 50円単位
+    desired_hourly_wage = int(
+        round(
+            desired_hourly_wage
+            / 50
+        )
+        * 50
+    )
+
+    # 極端に低い希望時給を防ぐ
+    desired_hourly_wage = max(
+        desired_hourly_wage,
+        1200,
+    )
+
+    return desired_hourly_wage
 
 
 # =========================================================
@@ -230,8 +426,10 @@ for _, candidate in candidates.iterrows():
     ]
 
 
-    # 求職終了済みならその日まで、
-    # 求職中ならデータ期間末までを有効期間とする
+    # -----------------------------------------------------
+    # 求職可能期間
+    # -----------------------------------------------------
+
     if pd.notna(
         candidate["search_end_date"]
     ):
@@ -249,7 +447,7 @@ for _, candidate in candidates.iterrows():
 
 
     # =====================================================
-    # この候補者の職歴を取得
+    # この候補者の職歴
     # =====================================================
 
     candidate_exp = candidate_experiences[
@@ -268,53 +466,15 @@ for _, candidate in candidates.iterrows():
     )
 
 
-    # candidate_experiences.pyでは
-    # 全候補者に最低1件の職歴を保証しているが、
-    # 念のためここでも確認する
-    if len(candidate_exp) == 0:
-        continue
+    # generate_candidate_experiences.pyで
+    # 全候補者に最低1件を保証しているため、
+    # ここでは異常として扱う。
+    assert len(candidate_exp) > 0
 
 
     # =====================================================
-    # 修正① 希望職種
+    # 希望職種
     # =====================================================
-    #
-    # 【変更前】
-    #
-    # # 80％は経験職種から選択
-    # # 20％は別職種へのキャリアチェンジ
-    #
-    # if rng.random() < 0.80:
-    #
-    #     preferred_occupation_id = (
-    #         candidate_exp.iloc[0]["occupation_id"]
-    #     )
-    #
-    # else:
-    #
-    #     preferred_occupation_id = rng.choice(
-    #         list(base_hourly_wage.keys())
-    #     )
-    #
-    #
-    # 【問題点】
-    # キャリアチェンジ側でも現在の経験職種が
-    # 再度選ばれる可能性がある。
-    #
-    # また、経験領域とはまったく関係のない職種への
-    # 転換が同じ確率で発生していた。
-    #
-    #
-    # 【修正仕様】
-    # ・80%は直近経験職種をそのまま希望
-    # ・20%はキャリアチェンジ
-    # ・キャリアチェンジの70%程度は
-    #   同一occupation_group内の別職種
-    # ・残りは異なる領域への転換も許容
-    #
-    # -----------------------------------------------------
-    # 変更後コード
-    # -----------------------------------------------------
 
     latest_occupation_id = (
         candidate_exp.iloc[0][
@@ -323,12 +483,14 @@ for _, candidate in candidates.iterrows():
     )
 
 
+    # 80%は直近経験職種を希望
     if rng.random() < 0.80:
 
         preferred_occupation_id = (
             latest_occupation_id
         )
 
+    # 20%はキャリアチェンジ
     else:
 
         preferred_occupation_id = (
@@ -339,7 +501,7 @@ for _, candidate in candidates.iterrows():
 
 
     # =====================================================
-    # 希望職種に対するスキルレベル
+    # 希望職種に対する候補者スキル
     # =====================================================
 
     matching_experience = candidate_exp[
@@ -362,7 +524,12 @@ for _, candidate in candidates.iterrows():
 
     else:
 
-        # 未経験職種の場合
+        # 未経験職種を希望した場合は、
+        # 便宜上1～2程度の初級水準とする。
+        #
+        # ただしapplication分析では、
+        # 同職種経験がないこと自体を
+        # same_occupation_experience_flagで区別する。
         candidate_skill_level = int(
             rng.choice(
                 [
@@ -378,57 +545,42 @@ for _, candidate in candidates.iterrows():
 
 
     # =====================================================
-    # 希望時給
+    # 初回希望時給
+    # =====================================================
+    #
+    # 【変更前】
+    #
+    # registration_date.year >= 2026
+    # の場合のみ1.08倍としていた。
+    #
+    #
+    # 【問題点】
+    #
+    # 初回希望については問題ないが、
+    # 2025年登録者が2026年に希望条件を更新した場合でも、
+    # 更新時点の市場上昇が反映されなかった。
+    #
+    #
+    # 【修正仕様】
+    #
+    # 初回希望はregistration_dateを基準日として計算する。
+    #
+    # 後続の更新が2026年に発生した場合は、
+    # update_dateを基準として更新時点の市場水準を反映する。
     # =====================================================
 
     desired_hourly_wage = (
-        base_hourly_wage[
-            preferred_occupation_id
-        ]
-    )
-
-
-    # スキルによる調整
-    desired_hourly_wage += (
-        candidate_skill_level - 3
-    ) * 150
-
-
-    # 個人差
-    desired_hourly_wage += rng.normal(
-        loc=0,
-        scale=100,
-    )
-
-
-    # 2026年は希望時給水準を8％程度上昇
-    #
-    # 仮説2：
-    # 求人提示時給の上昇よりも
-    # 候補者希望時給の上昇をやや大きくし、
-    # 給与条件ミスマッチが拡大する構造を作る。
-    if (
-        registration_date.year
-        >= 2026
-    ):
-
-        desired_hourly_wage *= 1.08
-
-
-    # 50円単位に丸める
-    desired_hourly_wage = int(
-        round(
-            desired_hourly_wage
-            / 50
+        generate_desired_hourly_wage(
+            occupation_id=(
+                preferred_occupation_id
+            ),
+            skill_level=(
+                candidate_skill_level
+            ),
+            reference_date=(
+                registration_date
+            ),
         )
-        * 50
-    )
-
-
-    # 最低時給を設定
-    desired_hourly_wage = max(
-        desired_hourly_wage,
-        1200,
     )
 
 
@@ -447,16 +599,8 @@ for _, candidate in candidates.iterrows():
     # =====================================================
 
     preferred_work_style = rng.choice(
-        [
-            "onsite",
-            "hybrid",
-            "remote",
-        ],
-        p=[
-            0.50,
-            0.35,
-            0.15,
-        ],
+        work_styles,
+        p=work_style_probabilities,
     )
 
 
@@ -472,11 +616,16 @@ for _, candidate in candidates.iterrows():
 
     has_update = (
         search_period_days >= 90
-        and rng.random() < 0.30
+        and
+        rng.random() < 0.30
     )
 
 
     if has_update:
+
+        # -------------------------------------------------
+        # 更新日
+        # -------------------------------------------------
 
         update_days = int(
             rng.integers(
@@ -498,11 +647,11 @@ for _, candidate in candidates.iterrows():
 
 
         # -------------------------------------------------
-        # 1件目
+        # 1件目の希望条件
         # -------------------------------------------------
 
         first_preference_id = (
-            f"PRE{preference_counter:05d}"
+            f"PRE{preference_counter:06d}"
         )
 
 
@@ -526,31 +675,77 @@ for _, candidate in candidates.iterrows():
         preference_counter += 1
 
 
-        # -------------------------------------------------
-        # 更新後は希望時給を少し上げる
-        # -------------------------------------------------
+        # =================================================
+        # 修正② 更新後希望時給
+        # =================================================
+        #
+        # 【変更前】
+        #
+        # desired_hourly_wage
+        # × 1.03～1.07
+        #
+        #
+        # 【問題点】
+        #
+        # 2025年登録者が2026年に更新しても、
+        # 2026年の市場時給上昇8%が反映されない。
+        #
+        #
+        # 【修正仕様】
+        #
+        # 更新日時点の市場水準を再計算したうえで、
+        # 求職活動中の条件見直しとして
+        # 0～5%程度の追加調整を行う。
+        #
+        # これにより更新者全員が必ず大幅値上げする
+        # 決定論的な処理は避ける。
+        # =================================================
+
+        updated_market_wage = (
+            generate_desired_hourly_wage(
+                occupation_id=(
+                    preferred_occupation_id
+                ),
+                skill_level=(
+                    candidate_skill_level
+                ),
+                reference_date=(
+                    update_date
+                ),
+            )
+        )
+
+
+        updated_hourly_wage = (
+            updated_market_wage
+            * rng.uniform(
+                1.00,
+                1.05,
+            )
+        )
+
 
         updated_hourly_wage = int(
             round(
-                (
-                    desired_hourly_wage
-                    * rng.uniform(
-                        1.03,
-                        1.07,
-                    )
-                )
+                updated_hourly_wage
                 / 50
             )
             * 50
         )
 
 
-        second_preference_id = (
-            f"PRE{preference_counter:05d}"
+        updated_hourly_wage = max(
+            updated_hourly_wage,
+            1200,
         )
 
 
-        # 求職中なら現在の希望条件なので終了日はNULL
+        second_preference_id = (
+            f"PRE{preference_counter:06d}"
+        )
+
+
+        # 求職中の場合は現在有効なのでNULL
         if pd.isna(
             candidate["search_end_date"]
         ):
@@ -588,7 +783,7 @@ for _, candidate in candidates.iterrows():
         # =================================================
 
         preference_id = (
-            f"PRE{preference_counter:05d}"
+            f"PRE{preference_counter:06d}"
         )
 
 
@@ -671,7 +866,7 @@ assert candidate_preferences[
 assert candidate_preferences[
     "preferred_occupation_id"
 ].isin(
-    base_hourly_wage.keys()
+    occupation_ids
 ).all()
 
 
@@ -683,11 +878,7 @@ assert candidate_preferences[
 assert candidate_preferences[
     "preferred_work_style"
 ].isin(
-    [
-        "onsite",
-        "hybrid",
-        "remote",
-    ]
+    work_styles
 ).all()
 
 
@@ -695,8 +886,6 @@ assert candidate_preferences[
 # 有効期間の品質チェック
 # =========================================================
 
-# 有効終了日がある場合、
-# 有効開始日以降であること
 valid_periods = (
     candidate_preferences[
         candidate_preferences[
@@ -736,8 +925,7 @@ preference_check = (
 )
 
 
-# 希望条件の有効開始日は
-# 登録日より前にならない
+# 希望条件開始日は登録日以降
 assert (
     preference_check[
         "effective_from"
@@ -749,8 +937,18 @@ assert (
 ).all()
 
 
+# 全希望条件開始日はデータ期間内
+assert (
+    preference_check[
+        "effective_from"
+    ]
+    <=
+    DATA_END_DATE
+).all()
+
+
 # 求職終了済み候補者では、
-# 希望条件の終了日が求職終了日を超えない
+# 希望条件終了日がsearch_end_dateを超えない
 ended_preference_check = (
     preference_check[
         preference_check[
@@ -778,10 +976,6 @@ assert (
 # =========================================================
 # 希望条件期間の重複チェック
 # =========================================================
-#
-# 同一候補者について、
-# 1件目のeffective_toの翌日から
-# 2件目が始まる構造になっていることを確認する。
 
 preference_order_check = (
     candidate_preferences
@@ -851,7 +1045,7 @@ assert (
 
 
 # =========================================================
-# 全候補者に最低1件の希望条件が存在
+# 全候補者に最低1件の希望条件
 # =========================================================
 
 candidates_with_preferences = set(
@@ -871,77 +1065,57 @@ assert set(
 
 
 # =========================================================
+# 1人あたり希望条件件数
+# =========================================================
+
+preference_count_per_candidate = (
+    candidate_preferences
+    .groupby(
+        "candidate_id"
+    )
+    .size()
+)
+
+
+assert (
+    preference_count_per_candidate
+    .between(
+        1,
+        2,
+    )
+    .all()
+)
+
+
+# =========================================================
 # CSV出力
+# =========================================================
+#
+# 【変更前】
+#
+# candidate_preferences_test.csv
+#
+#
+# 【修正仕様】
+#
+# candidate_preferences.csv
 # =========================================================
 
 candidate_preferences.to_csv(
-    OUTPUT_DIR
-    / "candidate_preferences_test.csv",
+    OUTPUT_FILE,
     index=False,
     encoding="utf-8-sig",
 )
 
 
 # =========================================================
-# 内容確認
+# 分析確認用データ
 # =========================================================
 
-print(
-    candidate_preferences
-)
+# ---------------------------------------------------------
+# 最新職歴
+# ---------------------------------------------------------
 
-print()
-
-print(
-    "希望条件テストデータを生成しました。"
-)
-
-print(
-    f"件数: {len(candidate_preferences)}"
-)
-
-
-print()
-print(
-    "求職者ごとの希望条件件数"
-)
-
-print(
-    candidate_preferences[
-        "candidate_id"
-    ].value_counts().sort_index()
-)
-
-
-print()
-print(
-    "希望勤務形態"
-)
-
-print(
-    candidate_preferences[
-        "preferred_work_style"
-    ].value_counts()
-)
-
-
-print()
-print(
-    "希望時給の基本統計量"
-)
-
-print(
-    candidate_preferences[
-        "desired_hourly_wage"
-    ].describe()
-)
-
-
-# =========================================================
-# 修正①の内容確認
-# =========================================================
-
-# 最新職歴との関係を確認する
 latest_experience = (
     candidate_experiences
     .sort_values(
@@ -975,6 +1149,10 @@ latest_experience = (
 )
 
 
+# ---------------------------------------------------------
+# 初回希望条件
+# ---------------------------------------------------------
+
 preference_review = (
     candidate_preferences
     .sort_values(
@@ -994,6 +1172,25 @@ preference_review = (
         on="candidate_id",
         how="left",
     )
+    .merge(
+        candidates[
+            [
+                "candidate_id",
+                "registration_date",
+            ]
+        ],
+        on="candidate_id",
+        how="left",
+    )
+)
+
+
+preference_review[
+    "registration_year"
+] = (
+    preference_review[
+        "registration_date"
+    ].dt.year
 )
 
 
@@ -1045,9 +1242,108 @@ preference_review[
 )
 
 
+# =========================================================
+# 内容確認
+# =========================================================
+#
+# 【変更前】
+#
+# candidate_preferences全件や、
+# candidate_idごとの全件をprintしていた。
+#
+#
+# 【問題点】
+#
+# 約1,950人では出力量が大きく、
+# 品質確認として読みづらい。
+#
+#
+# 【修正仕様】
+#
+# 集計値と先頭サンプルのみ表示する。
+# =========================================================
+
+print(
+    "分析用希望条件データを生成しました。"
+)
+
+print()
+
+print(
+    f"候補者数: "
+    f"{candidates['candidate_id'].nunique():,}"
+)
+
+print(
+    f"希望条件件数: "
+    f"{len(candidate_preferences):,}"
+)
+
+
 print()
 print(
-    "直近経験職種と希望職種が一致する割合"
+    "【候補者ごとの希望条件件数分布】"
+)
+
+print(
+    preference_count_per_candidate
+    .value_counts()
+    .sort_index()
+)
+
+
+print()
+print(
+    "【希望勤務形態】"
+)
+
+print(
+    candidate_preferences[
+        "preferred_work_style"
+    ]
+    .value_counts()
+)
+
+
+print()
+print(
+    "【希望時給の基本統計量】"
+)
+
+print(
+    candidate_preferences[
+        "desired_hourly_wage"
+    ]
+    .describe()
+)
+
+
+print()
+print(
+    "【登録年別の初回希望時給】"
+)
+
+print(
+    preference_review
+    .groupby(
+        "registration_year"
+    )[
+        "desired_hourly_wage"
+    ]
+    .agg(
+        [
+            "count",
+            "mean",
+            "median",
+            "std",
+        ]
+    )
+)
+
+
+print()
+print(
+    "【直近経験職種と希望職種が一致する割合】"
 )
 
 print(
@@ -1059,8 +1355,8 @@ print(
 
 print()
 print(
-    "直近経験職種と希望職種が"
-    "同一職種グループの割合"
+    "【直近経験職種と希望職種が"
+    "同一職種グループの割合】"
 )
 
 print(
@@ -1072,21 +1368,30 @@ print(
 
 print()
 print(
-    "直近経験職種と希望職種の確認"
+    "【希望職種別件数】"
 )
 
 print(
-    preference_review[
+    candidate_preferences[
+        "preferred_occupation_id"
+    ]
+    .value_counts()
+    .sort_index()
+)
+
+
+print()
+print(
+    "【希望条件サンプル：先頭20件】"
+)
+
+print(
+    candidate_preferences
+    .sort_values(
         [
             "candidate_id",
-            "latest_experience_occupation_id",
-            "preferred_occupation_id",
-            "same_as_latest_experience",
-            "latest_experience_group",
-            "preferred_occupation_group",
-            "same_occupation_group",
+            "effective_from",
         ]
-    ].sort_values(
-        "candidate_id"
     )
+    .head(20)
 )

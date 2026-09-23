@@ -9,12 +9,22 @@ import pandas as pd
 # =========================================================
 
 OUTPUT_DIR = Path("data/raw")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-N_CANDIDATES = 10
+# 分析用データでは、
+# 小規模テスト用の *_test.csv ではなく、
+# 正式な分析用ファイル名を使用する。
+OUTPUT_FILE = OUTPUT_DIR / "candidates.csv"
+
+# データ観察終了日
+DATA_END_DATE = pd.Timestamp("2026-09-30")
 
 # 乱数生成器
-# 同じシードを使うことで、同じテストデータを再現できる
-rng = np.random.default_rng(42)
+#
+# 分析結果を見て都合のよい乱数へ変更しないよう、
+# 分析用データではseedを固定する。
+SEED = 42
+rng = np.random.default_rng(SEED)
 
 
 # =========================================================
@@ -35,90 +45,179 @@ recruiters = pd.read_csv(
 # =========================================================
 
 # 2025年4月からの分析に備えて、
-# 2025年1～3月はウォームアップ期間として含める
+# 2025年1～3月はウォームアップ期間として含める。
 start_date = pd.Timestamp("2025-01-01")
-end_date = pd.Timestamp("2026-09-30")
+end_date = DATA_END_DATE
 
 
 # =========================================================
-# 修正① 求職者登録日の生成方法
+# 修正① 候補者数と登録月の生成方法
 # =========================================================
 #
 # 【変更前】
-# 2025-01-01～2026-09-30の全期間から、
-# 求職者ごとに登録日を完全ランダムで生成していた。
+#
+# N_CANDIDATES = 10
+#
+# registration_months_test = [
+#     "2025-02",
+#     "2025-04",
+#     "2025-05",
+#     "2025-07",
+#     "2025-09",
+#     "2026-02",
+#     "2026-04",
+#     "2026-05",
+#     "2026-07",
+#     "2026-09",
+# ]
+#
 #
 # 【問題点】
-# 初回EDAでは、2025年登録者は5名存在したものの、
-# 2025年4～9月の求人公開期間中に登録済みだった候補者が
-# 実質1名しか存在しなかった。
 #
-# その結果、
-# ・2025年の求人エントリーが0件
-# ・2025年と2026年の応募数を適切に比較できない
-# ・60日以内募集枠充足率の年次比較が生成時期の偏りに左右される
-# という問題が発生した。
+# 小規模テストでは、
+# 生成処理が正常に接続できることを確認する目的で、
+# 候補者を10人に固定していた。
+#
+# しかし統計分析では、
+#
+# ・年次差の検定
+# ・信頼区間
+# ・効果量
+# ・相関分析
+# ・ロジスティック回帰
+#
+# などを実施するため、十分な候補者数が必要となる。
+#
+# また、
+#
+# 「2025年850人」
+# 「2026年950人」
+#
+# と単純に暦年で比較すると、
+# 2025年は12か月、
+# 2026年は9か月しか観察していないため、
+# 月当たりの候補者供給量を適切に比較できない。
+#
 #
 # 【修正仕様】
-# 小規模テストでは登録日を分析期間全体から完全ランダムにはせず、
-# 登録月をあらかじめ分散させる。
 #
-# ・2025年：5名
-# ・2026年：5名
-# ・ウォームアップ期間にも登録者を配置
-# ・4～9月の分析対象期間にも複数の登録者を配置
-# ・具体的な「日」は各月の中でランダムに生成する
+# 分析対象期間を同じ9か月で比較する。
 #
-# 本番データでは、この固定リスト方式ではなく、
-# 月単位の候補者登録数を設定し、
-# 2026年の候補者供給を2025年比で約+7%とする予定。
+# 2025年4～12月：850人
+# 2026年1～9月 ：950人
 #
+# → 2026年の候補者供給は約+11.8%
+#
+# さらに、
+# 2025年4月の分析開始前から求職者が存在する状態を作るため、
+# 2025年1～3月に150人をウォームアップ候補者として生成する。
+#
+# 合計候補者数：
+#
+# 150 + 850 + 950
+# = 1,950人
+#
+# 月ごとの人数は完全均等にはせず、
+# 小さなばらつきを持たせる。
+# =========================================================
+
+
 # ---------------------------------------------------------
-# 変更前コード
-# ---------------------------------------------------------
-#
-# total_days = (
-#     end_date - start_date
-# ).days
-#
-# 各候補者について以下を実行していた。
-#
-# random_days = rng.integers(
-#     0,
-#     total_days + 1,
-# )
-#
-# registration_date = (
-#     start_date
-#     + pd.Timedelta(
-#         days=int(random_days)
-#     )
-# )
-#
-# ---------------------------------------------------------
-# 変更後コード
+# ウォームアップ期間
+# 2025年1～3月
+# 合計150人
 # ---------------------------------------------------------
 
-# 小規模テスト用の登録月
-#
-# 両年で同じような時期に候補者を配置し、
-# 年次比較時に登録時期そのものが大きな偏りを作らないようにする。
-registration_months_test = [
-    "2025-02",
-    "2025-04",
-    "2025-05",
-    "2025-07",
-    "2025-09",
-    "2026-02",
-    "2026-04",
-    "2026-05",
-    "2026-07",
-    "2026-09",
-]
+warmup_monthly_counts = {
+    "2025-01": 45,
+    "2025-02": 50,
+    "2025-03": 55,
+}
 
-# 設定した登録月数と求職者数が一致していることを確認
+
+# ---------------------------------------------------------
+# 2025年分析対象期間
+# 2025年4～12月
+# 合計850人
+# ---------------------------------------------------------
+
+analysis_2025_monthly_counts = {
+    "2025-04": 90,
+    "2025-05": 92,
+    "2025-06": 94,
+    "2025-07": 95,
+    "2025-08": 96,
+    "2025-09": 95,
+    "2025-10": 94,
+    "2025-11": 97,
+    "2025-12": 97,
+}
+
+
+# ---------------------------------------------------------
+# 2026年分析対象期間
+# 2026年1～9月
+# 合計950人
+# ---------------------------------------------------------
+
+analysis_2026_monthly_counts = {
+    "2026-01": 100,
+    "2026-02": 103,
+    "2026-03": 105,
+    "2026-04": 107,
+    "2026-05": 108,
+    "2026-06": 109,
+    "2026-07": 106,
+    "2026-08": 105,
+    "2026-09": 107,
+}
+
+
+# ---------------------------------------------------------
+# 月別設定を統合
+# ---------------------------------------------------------
+
+monthly_registration_counts = {
+    **warmup_monthly_counts,
+    **analysis_2025_monthly_counts,
+    **analysis_2026_monthly_counts,
+}
+
+
+# 候補者総数
+N_CANDIDATES = sum(
+    monthly_registration_counts.values()
+)
+
+
+# =========================================================
+# 登録月リストを作成
+# =========================================================
+
+registration_months = []
+
+for month, count in monthly_registration_counts.items():
+
+    registration_months.extend(
+        [month] * count
+    )
+
+
+# 候補者IDと登録月に不要な規則性が出ないよう、
+# 月リストをランダムに並べ替える。
+#
+# 例：
+# CAN00001～CAN00090がすべて2025-04
+# のような人工的な並びを避ける。
+rng.shuffle(
+    registration_months
+)
+
+
+# 設定した月別人数の合計と
+# 候補者総数が一致していることを確認
 assert (
-    len(registration_months_test)
+    len(registration_months)
     == N_CANDIDATES
 )
 
@@ -143,9 +242,8 @@ for i in range(1, N_CANDIDATES + 1):
     # 登録日
     # -----------------------------------------------------
 
-    # 求職者ごとに割り当てられた登録月を取得
     registration_month = (
-        registration_months_test[
+        registration_months[
             i - 1
         ]
     )
@@ -156,30 +254,28 @@ for i in range(1, N_CANDIDATES + 1):
         f"{registration_month}-01"
     )
 
-    # その月の最終日を取得
-    #
-    # 例：
-    # 2025-04-01 + MonthEnd(0)
-    # → 2025-04-30
+    # その月の最終日
     month_end = (
         month_start
         + pd.offsets.MonthEnd(0)
     )
 
-    # 念のため、
-    # データ生成期間の終了日を超えないようにする
+    # データ観察終了日を超えないようにする
     month_end = min(
         month_end,
         end_date,
     )
 
-    # 月初から月末までの日数を計算
+    # 月初から月末までの日数
     days_in_range = (
         month_end
         - month_start
     ).days
 
-    # 登録月の中で具体的な登録日をランダムに決定
+    # 月内の具体的な登録日はランダムにする。
+    #
+    # 月別人数そのものは制御するが、
+    # 日単位ではランダム性を残す。
     random_days = int(
         rng.integers(
             0,
@@ -198,9 +294,27 @@ for i in range(1, N_CANDIDATES + 1):
     # -----------------------------------------------------
     # 求職ステータス
     # -----------------------------------------------------
+    #
+    # 【変更前】
+    #
+    # 小規模テストでも
+    # searching 75%
+    # ended     25%
+    # としていた。
+    #
+    # 【問題点】
+    #
+    # この部分については、
+    # 小規模テストで大きな不整合は確認されなかった。
+    #
+    # 【修正仕様】
+    #
+    # 分析用データでも同じ比率を維持する。
+    #
+    # placedはここでは生成せず、
+    # placements生成後に更新する。
+    # -----------------------------------------------------
 
-    # 現段階では placed は生成しない。
-    # placements生成後に就業決定者をplacedへ更新する。
     status = rng.choice(
         [
             "searching",
@@ -227,6 +341,8 @@ for i in range(1, N_CANDIDATES + 1):
         # 最低14日程度の求職期間を確保できる場合
         if max_search_days >= 14:
 
+            # 最短14日
+            # 最長180日程度
             search_days = int(
                 rng.integers(
                     14,
@@ -244,10 +360,11 @@ for i in range(1, N_CANDIDATES + 1):
                 )
             )
 
-        # データ期間末直前の登録者など、
-        # 十分な求職期間を確保できない場合はsearchingへ戻す
         else:
 
+            # データ期間末直前に登録した候補者は、
+            # 十分な求職期間を観察できないため
+            # endedにはせずsearchingとして扱う。
             status = "searching"
             search_end_date = pd.NaT
 
@@ -259,8 +376,24 @@ for i in range(1, N_CANDIDATES + 1):
     # -----------------------------------------------------
     # CA担当者を割り当てるか
     # -----------------------------------------------------
+    #
+    # 【変更前】
+    #
+    # CA割当率 = 70%
+    #
+    # 【問題点】
+    #
+    # 小規模EDAでは、
+    # CA割当率自体に重大な問題は確認されなかった。
+    #
+    # 【修正仕様】
+    #
+    # 分析用データでも70%を維持する。
+    #
+    # CA未割当候補者を残すことで、
+    # self_entry中心で活動する候補者も表現する。
+    # -----------------------------------------------------
 
-    # 登録時点ではまだCA未割当の候補者も存在する
     has_ca = (
         rng.random() < 0.70
     )
@@ -268,7 +401,7 @@ for i in range(1, N_CANDIDATES + 1):
 
     if has_ca:
 
-        # 登録日時点で在籍しているCAだけを抽出
+        # 登録日時点で在籍しているCAのみ抽出
         active_ca = recruiters[
             (
                 recruiters["role_type"]
@@ -290,7 +423,6 @@ for i in range(1, N_CANDIDATES + 1):
             )
         ]
 
-        # 念のため在籍CAが存在する場合のみ割当
         if len(active_ca) > 0:
 
             ca_id = rng.choice(
@@ -343,13 +475,19 @@ candidates = pd.DataFrame(
 # データ品質チェック
 # =========================================================
 
-# 求職者IDが一意
+# ---------------------------------------------------------
+# ID
+# ---------------------------------------------------------
+
 assert candidates[
     "candidate_id"
 ].is_unique
 
 
-# 必須項目がNULLでない
+# ---------------------------------------------------------
+# 必須項目
+# ---------------------------------------------------------
+
 assert candidates[
     "candidate_id"
 ].notna().all()
@@ -363,7 +501,10 @@ assert candidates[
 ].notna().all()
 
 
-# ステータスが想定値のみ
+# ---------------------------------------------------------
+# ステータス
+# ---------------------------------------------------------
+
 assert candidates[
     "status"
 ].isin(
@@ -374,7 +515,7 @@ assert candidates[
 ).all()
 
 
-# endedなら求職終了日が必須
+# endedなら求職終了日必須
 assert candidates.loc[
     candidates["status"] == "ended",
     "search_end_date",
@@ -388,7 +529,10 @@ assert candidates.loc[
 ].isna().all()
 
 
-# 求職終了日は登録日以降
+# ---------------------------------------------------------
+# 日付
+# ---------------------------------------------------------
+
 ended_candidates = candidates[
     candidates[
         "search_end_date"
@@ -406,16 +550,37 @@ assert (
 ).all()
 
 
-# CA IDが入っている場合、
-# recruitersに存在するCAであること
+assert (
+    candidates[
+        "registration_date"
+    ]
+    >= start_date
+).all()
+
+
+assert (
+    candidates[
+        "registration_date"
+    ]
+    <= end_date
+).all()
+
+
+# ---------------------------------------------------------
+# CA
+# ---------------------------------------------------------
+
 assigned_candidates = candidates[
     candidates["ca_id"].notna()
 ]
+
 
 ca_master = recruiters[
     recruiters["role_type"] == "CA"
 ]
 
+
+# CA IDがマスタに存在する
 assert assigned_candidates[
     "ca_id"
 ].isin(
@@ -425,7 +590,6 @@ assert assigned_candidates[
 ).all()
 
 
-# CAの着任日前に担当していないことを確認
 candidate_ca_check = (
     assigned_candidates.merge(
         recruiters[
@@ -441,6 +605,8 @@ candidate_ca_check = (
     )
 )
 
+
+# CA着任日前に担当していない
 assert (
     candidate_ca_check[
         "registration_date"
@@ -452,13 +618,14 @@ assert (
 ).all()
 
 
-# 離任済みCAの場合は、
-# 登録日が離任日以前であること
+# 離任済みCAの場合、
+# 登録日が離任日以前
 left_ca_check = candidate_ca_check[
     candidate_ca_check[
         "leave_date"
     ].notna()
 ]
+
 
 assert (
     left_ca_check[
@@ -472,52 +639,115 @@ assert (
 
 
 # =========================================================
-# 修正①に対する追加品質チェック
+# 修正① 分析用人数に対する品質チェック
 # =========================================================
 
-# 登録日がデータ生成期間内であること
-assert (
+# ウォームアップ期間
+warmup_mask = (
+    (
+        candidates["registration_date"]
+        >= pd.Timestamp("2025-01-01")
+    )
+    &
+    (
+        candidates["registration_date"]
+        <= pd.Timestamp("2025-03-31")
+    )
+)
+
+
+# 2025年比較対象期間
+analysis_2025_mask = (
+    (
+        candidates["registration_date"]
+        >= pd.Timestamp("2025-04-01")
+    )
+    &
+    (
+        candidates["registration_date"]
+        <= pd.Timestamp("2025-12-31")
+    )
+)
+
+
+# 2026年比較対象期間
+analysis_2026_mask = (
+    (
+        candidates["registration_date"]
+        >= pd.Timestamp("2026-01-01")
+    )
+    &
+    (
+        candidates["registration_date"]
+        <= pd.Timestamp("2026-09-30")
+    )
+)
+
+
+# 設計通りの人数になっていることを確認
+assert warmup_mask.sum() == 150
+
+assert analysis_2025_mask.sum() == 850
+
+assert analysis_2026_mask.sum() == 950
+
+
+# 合計1,950人
+assert len(candidates) == 1950
+
+
+# ---------------------------------------------------------
+# 全設定月に候補者が存在することを確認
+# ---------------------------------------------------------
+
+generated_month_counts = (
     candidates[
         "registration_date"
     ]
-    >= start_date
-).all()
-
-assert (
-    candidates[
-        "registration_date"
-    ]
-    <= end_date
-).all()
-
-
-# 小規模テストでは、
-# 2025年・2026年の双方に登録者が存在することを確認
-registration_year_counts = (
-    candidates[
-        "registration_date"
-    ]
-    .dt.year
+    .dt.to_period("M")
     .value_counts()
+    .sort_index()
 )
 
-assert (
-    2025
-    in registration_year_counts.index
-)
+
+expected_month_counts = pd.Series(
+    {
+        pd.Period(month, freq="M"): count
+        for month, count
+        in monthly_registration_counts.items()
+    }
+).sort_index()
+
 
 assert (
-    2026
-    in registration_year_counts.index
-)
+    generated_month_counts
+    ==
+    expected_month_counts
+).all()
 
 
 # =========================================================
 # CSV出力
 # =========================================================
+#
+# 【変更前】
+#
+# candidates_test.csv
+#
+# 【問題点】
+#
+# 今回から小規模テストではなく、
+# 統計分析に利用する正式な合成データを生成するため、
+# *_test.csv という名称は意味と一致しない。
+#
+# 【修正仕様】
+#
+# candidates.csv
+# として出力する。
+# =========================================================
 
 candidates.to_csv(
-    OUTPUT_DIR / "candidates_test.csv",
+    OUTPUT_FILE,
     index=False,
     encoding="utf-8-sig",
 )
@@ -527,31 +757,62 @@ candidates.to_csv(
 # 内容確認
 # =========================================================
 
-print(candidates)
-
-print()
 print(
-    "求職者テストデータを生成しました。"
-)
-
-print(
-    f"件数: {len(candidates)}"
+    "分析用求職者データを生成しました。"
 )
 
 print()
-print("登録年別件数")
 
 print(
-    candidates[
-        "registration_date"
-    ]
-    .dt.year
-    .value_counts()
-    .sort_index()
+    f"総候補者数: {len(candidates):,}"
 )
 
+
 print()
-print("登録月別件数")
+print(
+    "【分析期間別登録者数】"
+)
+
+print(
+    f"ウォームアップ 2025-01～03: "
+    f"{warmup_mask.sum():,}"
+)
+
+print(
+    f"2025分析対象 2025-04～12: "
+    f"{analysis_2025_mask.sum():,}"
+)
+
+print(
+    f"2026分析対象 2026-01～09: "
+    f"{analysis_2026_mask.sum():,}"
+)
+
+
+# 候補者供給増加率
+candidate_supply_growth = (
+    analysis_2026_mask.sum()
+    /
+    analysis_2025_mask.sum()
+    - 1
+)
+
+
+print()
+print(
+    "【候補者供給増加率】"
+)
+
+print(
+    f"2025 → 2026: "
+    f"{candidate_supply_growth:.1%}"
+)
+
+
+print()
+print(
+    "【登録月別件数】"
+)
 
 print(
     candidates[
@@ -562,8 +823,11 @@ print(
     .sort_index()
 )
 
+
 print()
-print("ステータス別件数")
+print(
+    "【ステータス別件数】"
+)
 
 print(
     candidates[
@@ -571,31 +835,45 @@ print(
     ].value_counts()
 )
 
-print()
-print("CA割当状況")
 
+print()
 print(
-    candidates[
-        "ca_id"
-    ].notna().value_counts()
+    "【CA割当状況】"
 )
 
-print()
-print("CA未割当件数")
-
 print(
     candidates[
         "ca_id"
-    ].isna().sum()
+    ]
+    .notna()
+    .value_counts()
 )
 
+
 print()
-print("CA担当者別件数")
+print(
+    "【CA未割当件数】"
+)
 
 print(
     candidates[
         "ca_id"
-    ].value_counts(
+    ]
+    .isna()
+    .sum()
+)
+
+
+print()
+print(
+    "【CA担当者別候補者数】"
+)
+
+print(
+    candidates[
+        "ca_id"
+    ]
+    .value_counts(
         dropna=False
     )
 )
