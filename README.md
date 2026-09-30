@@ -103,35 +103,36 @@ AIとPythonを活用して生成しています。
 
 ### ステータス遷移情報
 
-| 業務イベント                                               | 関連テーブル                                 | 状態の変化                                                                                              |
-| ---------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| 求職者が登録し、求職活動を開始する                         | `candidates`                                 | `status = searching`                                                                                    |
-| 求職者が求職活動を終了する                                 | `candidates`                                 | `status = ended`、`search_end_date` を設定                                                              |
-| 求職者が求人サイト上で求人へエントリーする                 | `job_entries`                                | エントリーレコードを作成                                                                                |
-| 求人エントリーが正式な応募案件につながる                   | `job_entries` / `applications`               | `job_entries.status = converted`、`applications` レコードを作成                                         |
-| 求人エントリーが正式な応募案件につながらない               | `job_entries`                                | `status = declined`                                                                                     |
-| CAが候補者へ求人を紹介する                                 | `candidate_activities` / `job_introductions` | 求人紹介レコードを作成                                                                                  |
-| CAからの求人紹介に対して候補者が応募を希望する             | `job_introductions` / `applications`         | `candidate_response = apply`、応募条件を満たした場合に `applications` レコードを作成                    |
-| CAからの求人紹介を候補者が検討する                         | `job_introductions`                          | `candidate_response = considering`                                                                      |
-| CAからの求人紹介を候補者が辞退する                         | `job_introductions`                          | `candidate_response = decline`                                                                          |
-| 候補者の応募意思を確認する                                 | `applications`                               | `intent_confirmed_date` を設定し、応募案件として管理開始                                                |
-| 応募意思確認後、観察期間内に次の結果まで到達していない     | `applications`                               | `status = confirmed`                                                                                    |
-| CAが候補者と求人の適合性を確認し、企業推薦を見送る         | `applications`                               | `status = screened_out`                                                                                 |
-| 企業推薦前に候補者が辞退する                               | `applications`                               | `status = withdrawn`、`withdrawal_stage = pre_recommendation`                                           |
-| CAが候補者を企業へ推薦する                                 | `applications`                               | `recommendation_date` を設定                                                                            |
-| 企業推薦が通過する                                         | `applications`                               | `recommendation_result = accepted`、`status = recommended`                                              |
-| 企業推薦段階で不成立となる                                 | `applications`                               | `recommendation_result = rejected`、`status = rejected`                                                 |
-| 企業推薦後、職場見学前に候補者が辞退する                   | `applications`                               | `status = withdrawn`、`withdrawal_stage = post_recommendation`                                          |
-| 職場見学の日程を設定する                                   | `workplace_visits`                           | `scheduled_date` を設定                                                                                 |
-| 職場見学日程を設定後、実施前に候補者が辞退する             | `workplace_visits` / `applications`          | `visit_status = cancelled`、`applications.status = withdrawn`、`withdrawal_stage = post_recommendation` |
-| 職場見学日程は設定済みだが、観察期間内に実施されていない   | `workplace_visits`                           | `visit_status = scheduled`                                                                              |
-| 職場見学を実施する                                         | `workplace_visits`                           | `visit_status = completed`、`visit_date` を設定                                                         |
-| 職場見学後も選考を継続する                                 | `workplace_visits`                           | `result = continue`                                                                                     |
-| 職場見学後に次工程へ進まない                               | `workplace_visits` / `applications`          | `result = decline`、`applications.status = rejected`                                                    |
-| 職場見学後、就業決定前に候補者が辞退する                   | `applications`                               | `status = withdrawn`、`withdrawal_stage = post_visit`                                                   |
-| 候補者が別求人で就業決定し、並行していた他の選考を終了する | `applications`                               | `status = withdrawn`、`withdrawal_reason = accepted_other_job`                                          |
-| 募集枠がすでに充足しているため選考終了となる               | `applications`                               | `status = rejected`                                                                                     |
-| 最終選考で就業合意に至らない                               | `applications`                               | `status = rejected`                                                                                     |
-| 候補者と求人企業の双方が条件に合意し、就業が決定する       | `applications` / `placements` / `candidates` | `applications.status = placed`、`placements` レコードを作成、`candidates.status = placed`               |
-| 就業決定後、分析期間内に就業開始日を迎える                 | `placements`                                 | `status = started`                                                                                      |
-| 就業決定済みだが、就業開始日が分析期間後である             | `placements`                                 | `status = planned`                                                                                      |
+| 業務イベント | 関連テーブル | 状態の変化 |
+| --- | --- | --- |
+| 求職者が登録し、求職活動を開始する | `candidates` | `status = searching` |
+| 求職者が求職活動を終了する | `candidates` | `status = ended`、`search_end_date` を設定 |
+| 求職者が求人サイト上で求人へエントリーする | `job_entries` | エントリーレコードを作成 |
+| 求人エントリーが正式な応募案件につながる | `job_entries` / `applications` | `job_entries.status = converted`、`applications` レコードを作成 |
+| 求人エントリーが正式な応募案件につながらない | `job_entries` | `status = declined` |
+| CAが候補者へ求人を紹介する | `candidate_activities` / `job_introductions` | 求人紹介レコードを作成 |
+| CAからの求人紹介に対して候補者が応募を希望する | `job_introductions` / `applications` | `candidate_response = apply`、応募条件を満たした場合に `applications` レコードを作成 |
+| CAからの求人紹介を候補者が検討する | `job_introductions` | `candidate_response = considering` |
+| CAからの求人紹介を候補者が辞退する | `job_introductions` | `candidate_response = decline` |
+| 候補者の応募意思を確認する | `applications` | `intent_confirmed_date` を設定し、応募案件として管理開始 |
+| 応募意思確認済み・次工程判定待ち／処理中 | `applications` | `status = confirmed` |
+| CAが候補者と求人の適合性を確認し、企業推薦を見送る | `applications` | `status = screened_out` |
+| 企業推薦前に候補者が辞退する | `applications` | `status = withdrawn`、`withdrawal_stage = pre_recommendation` |
+| CAが候補者を企業へ推薦する | `applications` | `recommendation_date` を設定 |
+| 企業推薦が通過する | `applications` | `recommendation_result = accepted`、`status = recommended` |
+| 企業推薦段階で不成立となる | `applications` | `recommendation_result = rejected`、`status = rejected` |
+| 企業推薦後、職場見学前に候補者が辞退する | `applications` | `status = withdrawn`、`withdrawal_stage = post_recommendation` |
+| 職場見学の日程を設定する | `workplace_visits` | `scheduled_date` を設定 |
+| 職場見学日程を設定後、実施前に候補者が辞退する | `workplace_visits` / `applications` | `visit_status = cancelled`、`applications.status = withdrawn`、`withdrawal_stage = post_recommendation` |
+| 職場見学日程は設定済みだが、観察期間内に実施されていない | `workplace_visits` | `visit_status = scheduled` |
+| 職場見学を実施する | `workplace_visits` | `visit_status = completed`、`visit_date` を設定 |
+| 職場見学後も選考を継続する | `workplace_visits` | `result = continue` |
+| 職場見学後に次工程へ進まない | `workplace_visits` / `applications` | `result = decline`、`applications.status = rejected` |
+| 職場見学後、就業決定前に候補者が辞退する | `applications` | `status = withdrawn`、`withdrawal_stage = post_visit` |
+| 候補者が別求人で就業決定し、並行していた他の選考を終了する | `applications` | `status = withdrawn`、`withdrawal_reason = accepted_other_job` |
+| 推薦後・職場見学後などの選考過程で、候補者辞退以外の理由により不成立となる | `applications` | `status = rejected` |
+| 候補者と求人企業の双方が条件に合意し、就業が決定する | `applications` / `placements` / `candidates` | `applications.status = placed`、`placements` レコードを作成、`candidates.status = placed` |
+| 就業決定後、分析期間内に就業開始日を迎える | `placements` | `status = started` |
+| 就業決定済みだが、就業開始日が分析期間後である | `placements` | `status = planned` |
+
+※ `applications.status = rejected` は、候補者辞退以外の理由で選考が終了した案件を表す。企業推薦段階の不成立は `recommendation_result = rejected`、職場見学後の不成立は `workplace_visits.result = decline` から判別できる。その他の不成立理由は、現在のデータ項目だけでは詳細に区別できない。
